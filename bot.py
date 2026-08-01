@@ -8,6 +8,7 @@ import qrcode
 from datetime import date
 from threading import Thread
 from flask import Flask, jsonify
+from PIL import Image, ImageDraw
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -152,6 +153,64 @@ def health():
 def run_web_server():
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
+# ======================== توابع کمکی ========================
+def round_corners(image, radius):
+    mask = Image.new('L', image.size, 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle([(0, 0), image.size], radius=radius, fill=255)
+    result = Image.new('RGBA', image.size, (0, 0, 0, 0))
+    result.putalpha(mask)
+    result.paste(image, (0, 0), mask)
+    return result
+
+def generate_qr_code(text, color='black', bg_color='white', corner_radius=0, size=10):
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=size,
+        border=2
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color=color, back_color=bg_color).convert('RGBA')
+    
+    if corner_radius > 0:
+        img = round_corners(img, corner_radius)
+    
+    return img
+
+# ======================== دیکشنری رنگ‌ها ========================
+COLORS = {
+    '⚫ مشکی': 'black',
+    '🔴 قرمز': 'red',
+    '🔵 آبی': 'blue',
+    '🟢 سبز': 'green',
+    '🟡 زرد': 'gold',
+    '🟣 بنفش': 'purple',
+    '🟠 نارنجی': 'orange',
+    '🩷 صورتی': 'pink'
+}
+
+BACKGROUNDS = {
+    '⚪ سفید': 'white',
+    '🟡 کرم': 'ivory',
+    '🔵 آبی روشن': 'lightblue',
+    '🟢 سبز روشن': 'lightgreen',
+    '🩷 صورتی روشن': 'lightpink',
+    '🟣 بنفش روشن': 'lavender'
+}
+
+CORNERS = {
+    '🔲 بدون گردی': 0,
+    '🔘 گردی کم': 20,
+    '⭕ گردی متوسط': 40,
+    '🟣 گردی زیاد': 60
+}
+
+# ======================== دیتای موقت کاربران ========================
+user_temp = {}
+
 # ======================== دستورات ربات ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -196,6 +255,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == 'main_menu':
         remaining = get_remaining(user_id)
         update_user(user_id, {"waiting_for_text": False})
+        if user_id in user_temp:
+            del user_temp[user_id]
         await query.edit_message_text(
             f"👋 به ربات کیوآر کد خوش آمدید!\n\n"
             f"📊 سهمیه باقی‌مانده امروز: {remaining}\n"
@@ -206,7 +267,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ==================== ساخت کیوآر کد ====================
+    # ==================== ساخت کیوآر کد جدید ====================
     if query.data == 'new_qr':
         remaining = get_remaining(user_id)
         if remaining <= 0:
@@ -223,15 +284,170 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # فعال کردن حالت انتظار برای متن
         update_user(user_id, {"waiting_for_text": True})
-        
         keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data='main_menu')]]
         await query.edit_message_text(
             f"📝 لطفاً متنی که می‌خواهید کیوآر کد شود را ارسال کنید:\n"
             f"(سهمیه باقی‌مانده: {remaining} عدد)",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        return
+    
+    # ==================== انتخاب ساده یا پیشرفته ====================
+    if query.data == 'simple_mode':
+        text = user_temp.get(user_id, {}).get('text', '')
+        if not text:
+            await query.edit_message_text(
+                "❌ خطا! لطفاً دوباره تلاش کنید.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
+            )
+            return
+        
+        # ساخت ساده
+        if not use_credit(user_id):
+            await query.edit_message_text(
+                f"❌ سهمیه شما تمام شده!",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
+            )
+            return
+        
+        try:
+            img = generate_qr_code(text)
+            path = f"qr_{user_id}.png"
+            img.save(path)
+            
+            remaining = get_remaining(user_id)
+            
+            await query.edit_message_text("⏳ در حال ساخت کیوآر کد...")
+            await query.message.reply_photo(
+                photo=open(path, "rb"),
+                caption=f"✅ کیوآر کد ساده ساخته شد!\n📊 سهمیه باقی‌مانده: {remaining}"
+            )
+            # پیام جداگانه برای دکمه بازگشت
+            await query.message.reply_text(
+                "🔹 برای بازگشت به منو، دکمه زیر را بزنید:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
+            )
+            os.remove(path)
+            
+            if user_id in user_temp:
+                del user_temp[user_id]
+                
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا: {str(e)}")
+        return
+    
+    # ==================== انتخاب پیشرفته ====================
+    if query.data == 'advanced_mode':
+        text = user_temp.get(user_id, {}).get('text', '')
+        if not text:
+            await query.edit_message_text(
+                "❌ خطا! لطفاً دوباره تلاش کنید.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
+            )
+            return
+        
+        # ذخیره متن و رفتن به مرحله اول (گردی گوشه)
+        user_temp[user_id]['step'] = 'corner'
+        keyboard = []
+        for name, value in CORNERS.items():
+            keyboard.append([InlineKeyboardButton(name, callback_data=f'corner_{value}')])
+        keyboard.append([InlineKeyboardButton("🔙 انصراف", callback_data='main_menu')])
+        
+        await query.edit_message_text(
+            "🎨 مرحله ۱ از ۳: گردی گوشه\n\n"
+            "لطفاً میزان گردی گوشه کیوآر کد را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # ==================== انتخاب گردی گوشه ====================
+    if query.data.startswith('corner_'):
+        corner = int(query.data.replace('corner_', ''))
+        user_temp[user_id]['corner'] = corner
+        user_temp[user_id]['step'] = 'bg_color'
+        
+        keyboard = []
+        for name, code in BACKGROUNDS.items():
+            keyboard.append([InlineKeyboardButton(name, callback_data=f'bg_{code}')])
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')])
+        
+        await query.edit_message_text(
+            f"✅ گردی گوشه: {corner} پیکسل\n\n"
+            "🎨 مرحله ۲ از ۳: رنگ پس‌زمینه\n\n"
+            "لطفاً رنگ پس‌زمینه کیوآر کد را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # ==================== انتخاب رنگ پس‌زمینه ====================
+    if query.data.startswith('bg_'):
+        bg_color = query.data.replace('bg_', '')
+        user_temp[user_id]['bg_color'] = bg_color
+        user_temp[user_id]['step'] = 'color'
+        
+        keyboard = []
+        for name, code in COLORS.items():
+            keyboard.append([InlineKeyboardButton(name, callback_data=f'color_{code}')])
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')])
+        
+        await query.edit_message_text(
+            f"✅ گردی گوشه: {user_temp[user_id]['corner']} پیکسل\n"
+            f"✅ رنگ پس‌زمینه: {bg_color}\n\n"
+            "🎨 مرحله ۳ از ۳: رنگ کیوآر کد\n\n"
+            "لطفاً رنگ خود کیوآر کد را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # ==================== انتخاب رنگ کیوآر کد و ساخت نهایی ====================
+    if query.data.startswith('color_'):
+        color = query.data.replace('color_', '')
+        user_temp[user_id]['color'] = color
+        
+        # دریافت همه تنظیمات
+        data = user_temp[user_id]
+        text = data.get('text', '')
+        corner = data.get('corner', 0)
+        bg_color = data.get('bg_color', 'white')
+        color = data.get('color', 'black')
+        
+        # ساخت کیوآر کد پیشرفته
+        if not use_credit(user_id):
+            await query.edit_message_text(
+                f"❌ سهمیه شما تمام شده!",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
+            )
+            return
+        
+        try:
+            img = generate_qr_code(text, color, bg_color, corner)
+            path = f"qr_{user_id}.png"
+            img.save(path)
+            
+            remaining = get_remaining(user_id)
+            
+            await query.edit_message_text("⏳ در حال ساخت کیوآر کد پیشرفته...")
+            await query.message.reply_photo(
+                photo=open(path, "rb"),
+                caption=f"✅ کیوآر کد پیشرفته ساخته شد!\n\n"
+                        f"🎨 رنگ: {color}\n"
+                        f"⬜ پس‌زمینه: {bg_color}\n"
+                        f"⭕ گردی گوشه: {corner} پیکسل\n"
+                        f"📊 سهمیه باقی‌مانده: {remaining}"
+            )
+            # پیام جداگانه برای دکمه بازگشت
+            await query.message.reply_text(
+                "🔹 برای بازگشت به منو، دکمه زیر را بزنید:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
+            )
+            os.remove(path)
+            
+            if user_id in user_temp:
+                del user_temp[user_id]
+                
+        except Exception as e:
+            await query.edit_message_text(f"❌ خطا: {str(e)}")
         return
     
     # ==================== خرید اشتراک ====================
@@ -314,53 +530,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # دریافت متن
     text = update.message.text
     
-    # بررسی سهمیه
-    if not use_credit(user_id):
-        update_user(user_id, {"waiting_for_text": False})
-        await update.message.reply_text(
-            f"❌ سهمیه شما تمام شده!\n\nبرای دریافت سهمیه بیشتر:\n🔗 دوستان خود را دعوت کنید (هر دعوت {REFERRAL_BONUS} سهمیه)\n💳 یا اشتراک تهیه کنید.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 خرید اشتراک", callback_data='buy')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]
-            ])
-        )
-        return
+    # ذخیره متن در دیتای موقت
+    user_temp[user_id] = {
+        'text': text,
+        'step': 'select_mode'
+    }
     
-    # ساخت کیوآر کد
-    try:
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=2
-        )
-        qr.add_data(text)
-        qr.make(fit=True)
-        
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        path = f"qr_{user_id}.png"
-        img.save(path)
-        
-        remaining = get_remaining(user_id)
-        
-        # غیرفعال کردن حالت انتظار
-        update_user(user_id, {"waiting_for_text": False})
-        
-        await update.message.reply_text("⏳ در حال ساخت کیوآر کد...")
-        await update.message.reply_photo(
-            photo=open(path, "rb"),
-            caption=f"✅ کیوآر کد ساخته شد!\n📊 سهمیه باقی‌مانده: {remaining}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
-        )
-        os.remove(path)
-        
-    except Exception as e:
-        update_user(user_id, {"waiting_for_text": False})
-        await update.message.reply_text(
-            f"❌ خطا در ساخت: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
-        )
+    # غیرفعال کردن حالت انتظار
+    update_user(user_id, {"waiting_for_text": False})
+    
+    # نمایش گزینه‌های ساده یا پیشرفته
+    keyboard = [
+        [InlineKeyboardButton("⚡ ساده (پیش‌فرض)", callback_data='simple_mode')],
+        [InlineKeyboardButton("🎨 پیشرفته (تنظیمات)", callback_data='advanced_mode')],
+        [InlineKeyboardButton("🔙 انصراف", callback_data='main_menu')]
+    ]
+    
+    await update.message.reply_text(
+        f"✅ متن ذخیره شد!\n\n"
+        f"📝 متن: {text}\n\n"
+        f"حالا انتخاب کنید که کیوآر کد را به چه صورتی بسازید:\n\n"
+        f"⚡ ساده: با تنظیمات پیش‌فرض (مشکی/سفید)\n"
+        f"🎨 پیشرفته: با انتخاب رنگ و گردی گوشه",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 # ======================== دستورات ادمین ========================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
