@@ -154,16 +154,7 @@ def run_web_server():
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
 # ======================== توابع کمکی ========================
-def round_corners(image, radius):
-    mask = Image.new('L', image.size, 0)
-    draw = ImageDraw.Draw(mask)
-    draw.rounded_rectangle([(0, 0), image.size], radius=radius, fill=255)
-    result = Image.new('RGBA', image.size, (0, 0, 0, 0))
-    result.putalpha(mask)
-    result.paste(image, (0, 0), mask)
-    return result
-
-def generate_qr_code(text, color='black', bg_color='white', corner_radius=0, size=10):
+def generate_qr_code(text, color='black', bg_color='white', size=10):
     qr = qrcode.QRCode(
         version=1,
         error_correction=qrcode.constants.ERROR_CORRECT_L,
@@ -174,10 +165,6 @@ def generate_qr_code(text, color='black', bg_color='white', corner_radius=0, siz
     qr.make(fit=True)
     
     img = qr.make_image(fill_color=color, back_color=bg_color).convert('RGBA')
-    
-    if corner_radius > 0:
-        img = round_corners(img, corner_radius)
-    
     return img
 
 # ======================== دیکشنری رنگ‌ها ========================
@@ -199,13 +186,6 @@ BACKGROUNDS = {
     '🟢 سبز روشن': 'lightgreen',
     '🩷 صورتی روشن': 'lightpink',
     '🟣 بنفش روشن': 'lavender'
-}
-
-CORNERS = {
-    '🔲 بدون گردی': 0,
-    '🔘 گردی کم': 20,
-    '⭕ گردی متوسط': 40,
-    '🟣 گردی زیاد': 60
 }
 
 # ======================== دیتای موقت کاربران ========================
@@ -303,7 +283,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # ساخت ساده
         if not use_credit(user_id):
             await query.edit_message_text(
                 f"❌ سهمیه شما تمام شده!",
@@ -323,7 +302,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=open(path, "rb"),
                 caption=f"✅ کیوآر کد ساده ساخته شد!\n📊 سهمیه باقی‌مانده: {remaining}"
             )
-            # پیام جداگانه برای دکمه بازگشت
             await query.message.reply_text(
                 "🔹 برای بازگشت به منو، دکمه زیر را بزنید:",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
@@ -347,34 +325,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # ذخیره متن و رفتن به مرحله اول (گردی گوشه)
-        user_temp[user_id]['step'] = 'corner'
-        keyboard = []
-        for name, value in CORNERS.items():
-            keyboard.append([InlineKeyboardButton(name, callback_data=f'corner_{value}')])
-        keyboard.append([InlineKeyboardButton("🔙 انصراف", callback_data='main_menu')])
-        
-        await query.edit_message_text(
-            "🎨 مرحله ۱ از ۳: گردی گوشه\n\n"
-            "لطفاً میزان گردی گوشه کیوآر کد را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-    
-    # ==================== انتخاب گردی گوشه ====================
-    if query.data.startswith('corner_'):
-        corner = int(query.data.replace('corner_', ''))
-        user_temp[user_id]['corner'] = corner
         user_temp[user_id]['step'] = 'bg_color'
-        
         keyboard = []
         for name, code in BACKGROUNDS.items():
             keyboard.append([InlineKeyboardButton(name, callback_data=f'bg_{code}')])
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')])
+        keyboard.append([InlineKeyboardButton("🔙 انصراف", callback_data='main_menu')])
         
         await query.edit_message_text(
-            f"✅ گردی گوشه: {corner} پیکسل\n\n"
-            "🎨 مرحله ۲ از ۳: رنگ پس‌زمینه\n\n"
+            "🎨 مرحله ۱ از ۲: انتخاب رنگ پس‌زمینه\n\n"
             "لطفاً رنگ پس‌زمینه کیوآر کد را انتخاب کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -389,12 +347,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = []
         for name, code in COLORS.items():
             keyboard.append([InlineKeyboardButton(name, callback_data=f'color_{code}')])
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')])
+        keyboard.append([InlineKeyboardButton("🔙 انصراف", callback_data='main_menu')])
         
         await query.edit_message_text(
-            f"✅ گردی گوشه: {user_temp[user_id]['corner']} پیکسل\n"
             f"✅ رنگ پس‌زمینه: {bg_color}\n\n"
-            "🎨 مرحله ۳ از ۳: رنگ کیوآر کد\n\n"
+            "🎨 مرحله ۲ از ۲: انتخاب رنگ کیوآر کد\n\n"
             "لطفاً رنگ خود کیوآر کد را انتخاب کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -405,14 +362,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         color = query.data.replace('color_', '')
         user_temp[user_id]['color'] = color
         
-        # دریافت همه تنظیمات
         data = user_temp[user_id]
         text = data.get('text', '')
-        corner = data.get('corner', 0)
         bg_color = data.get('bg_color', 'white')
         color = data.get('color', 'black')
         
-        # ساخت کیوآر کد پیشرفته
         if not use_credit(user_id):
             await query.edit_message_text(
                 f"❌ سهمیه شما تمام شده!",
@@ -421,7 +375,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         try:
-            img = generate_qr_code(text, color, bg_color, corner)
+            img = generate_qr_code(text, color, bg_color)
             path = f"qr_{user_id}.png"
             img.save(path)
             
@@ -433,10 +387,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=f"✅ کیوآر کد پیشرفته ساخته شد!\n\n"
                         f"🎨 رنگ: {color}\n"
                         f"⬜ پس‌زمینه: {bg_color}\n"
-                        f"⭕ گردی گوشه: {corner} پیکسل\n"
                         f"📊 سهمیه باقی‌مانده: {remaining}"
             )
-            # پیام جداگانه برای دکمه بازگشت
             await query.message.reply_text(
                 "🔹 برای بازگشت به منو، دکمه زیر را بزنید:",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]])
@@ -519,7 +471,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user = get_user(user_id)
     
-    # اگر کاربر در حالت انتظار برای متن نباشه
     if not user.get("waiting_for_text", False):
         await update.message.reply_text(
             "❌ لطفاً اول دکمه 'ساخت کیوآر کد جدید' را بزنید.",
@@ -527,19 +478,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # دریافت متن
     text = update.message.text
     
-    # ذخیره متن در دیتای موقت
     user_temp[user_id] = {
         'text': text,
         'step': 'select_mode'
     }
     
-    # غیرفعال کردن حالت انتظار
     update_user(user_id, {"waiting_for_text": False})
     
-    # نمایش گزینه‌های ساده یا پیشرفته
     keyboard = [
         [InlineKeyboardButton("⚡ ساده (پیش‌فرض)", callback_data='simple_mode')],
         [InlineKeyboardButton("🎨 پیشرفته (تنظیمات)", callback_data='advanced_mode')],
@@ -551,7 +498,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 متن: {text}\n\n"
         f"حالا انتخاب کنید که کیوآر کد را به چه صورتی بسازید:\n\n"
         f"⚡ ساده: با تنظیمات پیش‌فرض (مشکی/سفید)\n"
-        f"🎨 پیشرفته: با انتخاب رنگ و گردی گوشه",
+        f"🎨 پیشرفته: با انتخاب رنگ پس‌زمینه و رنگ کیوآر کد",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -572,7 +519,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👥 لیست کاربران", callback_data='admin_users')],
         [InlineKeyboardButton("➕ فعال‌سازی اشتراک", callback_data='admin_activate')],
         [InlineKeyboardButton("➖ لغو اشتراک", callback_data='admin_remove')],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data='main_menu')]
+        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back')]
     ]
     
     await update.message.reply_text(
@@ -592,8 +539,9 @@ async def admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⛔ دسترسی محدود!")
         return
     
+    data = load_data()
+    
     if query.data == 'admin_stats':
-        data = load_data()
         total = len(data)
         sub = sum(1 for u in data.values() if u.get("subscription", {}).get("active", False))
         today = str(date.today())
@@ -605,12 +553,11 @@ async def admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ اشتراک فعال: {sub}\n"
             f"📌 کاربران رایگان: {total - sub}\n"
             f"🔥 کاربران فعال امروز: {active_today}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel_back')]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back')]])
         )
         return
     
     elif query.data == 'admin_users':
-        data = load_data()
         users = list(data.keys())[:10]
         text = "👥 لیست ۱۰ کاربر اول:\n\n"
         for uid in users:
@@ -620,25 +567,25 @@ async def admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"\n📌 کل کاربران: {len(data)} نفر"
         await query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel_back')]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back')]])
         )
         return
     
     elif query.data == 'admin_activate':
         await query.edit_message_text(
             "🆔 آی‌دی عددی کاربر را ارسال کنید:\n\nمثال: `/activate 123456789`",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel_back')]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back')]])
         )
         return
     
     elif query.data == 'admin_remove':
         await query.edit_message_text(
             "🆔 آی‌دی عددی کاربر را ارسال کنید:\n\nمثال: `/remove 123456789`",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel_back')]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_back')]])
         )
         return
     
-    elif query.data == 'admin_panel_back':
+    elif query.data == 'admin_back':
         await admin_panel(update, context)
         return
 
@@ -702,13 +649,17 @@ def main():
     # ربات
     app = Application.builder().token(TOKEN).build()
     
+    # دستورات عمومی
     app.add_handler(CommandHandler("start", start))
+    
+    # دستورات ادمین
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("activate", activate_user))
     app.add_handler(CommandHandler("remove", remove_user))
     
-    app.add_handler(CallbackQueryHandler(button_handler))
+    # هندلرهای دکمه‌ها - ترتیب مهم است!
     app.add_handler(CallbackQueryHandler(admin_button, pattern="^admin_"))
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     print("🤖 ربات روشن شد...")
